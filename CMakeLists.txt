@@ -1,7 +1,7 @@
 find_package( OpenCV REQUIRED )
 
 find_package( ITK REQUIRED )
-include_directories( ${ITK_INCLUDE_DIRS} )
+include( ${ITK_USE_FILE} )
 
 set( reg_srcs ImageSimilarityRegistration.cxx )
 add_executable( ImageSimilarityRegistration ${reg_srcs} )

@@ -31,53 +31,17 @@
 #include "itkCenteredSimilarity2DTransform.h"
 
 #include "itkImageMaskSpatialObject.h"
-
 #include "itkImageFileReader.h"
 #include "itkImageFileWriter.h"
+#include "itkRGBPixel.h"
+#include "itkRGBToLuminanceImageFilter.h"
 
-#include "itkResampleImageFilter.h"
+#include "itkVectorResampleImageFilter.h"
 #include "itkCastImageFilter.h"
 #include "itkSubtractImageFilter.h"
 #include "itkRescaleIntensityImageFilter.h"
 #include "itkIdentityTransform.h"
 
-
-//  The following section of code implements a Command observer
-//  that will monitor the evolution of the registration process.
-//
-#include "itkCommand.h"
-class CommandIterationUpdate : public itk::Command
-{
-public:
-  typedef  CommandIterationUpdate   Self;
-  typedef  itk::Command             Superclass;
-  typedef itk::SmartPointer<Self>   Pointer;
-  itkNewMacro( Self );
-
-protected:
-  CommandIterationUpdate() {};
-
-public:
-  typedef itk::RegularStepGradientDescentOptimizerv4<double> OptimizerType;
-  typedef   const OptimizerType *                            OptimizerPointer;
-
-  void Execute(itk::Object *caller, const itk::EventObject & event) ITK_OVERRIDE
-    {
-    Execute( (const itk::Object *)caller, event);
-    }
-
-  void Execute(const itk::Object * object, const itk::EventObject & event) ITK_OVERRIDE
-    {
-    OptimizerPointer optimizer = static_cast< OptimizerPointer >( object );
-    if( ! itk::IterationEvent().CheckEvent( &event ) )
-      {
-      return;
-      }
-    std::cout << optimizer->GetCurrentIteration() << "   ";
-    std::cout << optimizer->GetValue() << "   ";
-    std::cout << optimizer->GetCurrentPosition() << std::endl;
-    }
-};
 
 int main( int argc, char *argv[] )
 {
@@ -93,31 +57,43 @@ int main( int argc, char *argv[] )
 
   const    unsigned int    Dimension = 2;
   typedef  float           PixelType;
+  typedef  itk::RGBPixel<unsigned char> RGBPixelType;
+  
+  typedef itk::Image< RGBPixelType, Dimension >  RGBImageType;
 
-  typedef itk::Image< PixelType, Dimension >  FixedImageType;
-  typedef itk::Image< PixelType, Dimension >  MovingImageType;
+  typedef itk::Image< PixelType, Dimension > ImageType;
 
   typedef itk::CenteredSimilarity2DTransform< double > TransformType;
 
   typedef itk::RegularStepGradientDescentOptimizerv4<double>         OptimizerType;
-  // typedef itk::MeanSquaresImageToImageMetricv4< FixedImageType,
-                                                // MovingImageType >    MetricType;
-  typedef itk::CorrelationImageToImageMetricv4< FixedImageType,
-                                                MovingImageType >    MetricType;
-  typedef itk::ImageRegistrationMethodv4< FixedImageType,
-                                          MovingImageType,
+  typedef itk::MeanSquaresImageToImageMetricv4< ImageType, ImageType >    MetricType;
+  // typedef itk::CorrelationImageToImageMetricv4< ImageType, ImageType >    MetricType;
+  typedef itk::ImageRegistrationMethodv4< ImageType,
+                                          ImageType,
                                           TransformType >            RegistrationType;
 
   TransformType::Pointer  transform = TransformType::New();
 
-  typedef itk::ImageFileReader< FixedImageType  > FixedImageReaderType;
-  typedef itk::ImageFileReader< MovingImageType > MovingImageReaderType;
+  typedef itk::ImageFileReader< RGBImageType  > FixedImageReaderType;
+  typedef itk::ImageFileReader< RGBImageType > MovingImageReaderType;
 
   FixedImageReaderType::Pointer  fixedImageReader  = FixedImageReaderType::New();
   MovingImageReaderType::Pointer movingImageReader = MovingImageReaderType::New();
 
   fixedImageReader->SetFileName(  argv[1] );
   movingImageReader->SetFileName( argv[2] );
+
+  typedef itk::RGBToLuminanceImageFilter<RGBImageType, ImageType> RGB2GrayType;
+
+  RGB2GrayType::Pointer fixedrgb2gray = RGB2GrayType::New();
+  fixedrgb2gray->SetInput(fixedImageReader->GetOutput());
+  fixedrgb2gray->Update();
+  ImageType::Pointer fixedImage = fixedrgb2gray->GetOutput();
+
+  RGB2GrayType::Pointer movingrgb2gray = RGB2GrayType::New();
+  movingrgb2gray->SetInput(movingImageReader->GetOutput());
+  movingrgb2gray->Update();
+  ImageType::Pointer movingImage = movingrgb2gray->GetOutput();
 
   typedef itk::Image<unsigned char, Dimension> ImageMaskType;
   typedef itk::ImageFileReader<ImageMaskType> MaskReaderType;
@@ -132,11 +108,11 @@ int main( int argc, char *argv[] )
 
   RegistrationType::Pointer   registration  = RegistrationType::New();
 
-  registration->SetFixedImage(    fixedImageReader->GetOutput()    );
-  registration->SetMovingImage(   movingImageReader->GetOutput()   );
+  registration->SetFixedImage( fixedImage );
+  registration->SetMovingImage( movingImage );
 
   MetricType::Pointer         metric        = MetricType::New();
-  metric->SetFixedImageMask(spatialObjectMask);
+  // metric->SetFixedImageMask(spatialObjectMask);
   registration->SetMetric(        metric        );
 
   OptimizerType::Pointer      optimizer     = OptimizerType::New();
@@ -144,22 +120,23 @@ int main( int argc, char *argv[] )
 
   typedef itk::CenteredTransformInitializer<
     TransformType,
-    FixedImageType,
-    MovingImageType > TransformInitializerType;
+    ImageType,
+    ImageType > TransformInitializerType;
 
   TransformInitializerType::Pointer initializer
                                       = TransformInitializerType::New();
 
   initializer->SetTransform( transform );
 
-  initializer->SetFixedImage( fixedImageReader->GetOutput() );
-  initializer->SetMovingImage( movingImageReader->GetOutput() );
+  initializer->SetFixedImage( fixedImage );
+  initializer->SetMovingImage( movingImage );
 
   initializer->MomentsOn();
 
   initializer->InitializeTransform();
 
   double initialScale = 1.0;
+  double initialAngle = 0.0;
 
   transform->SetScale( initialScale );
   transform->SetAngle( initialAngle );
@@ -185,9 +162,6 @@ int main( int argc, char *argv[] )
   optimizer->SetLearningRate( steplength );
   optimizer->SetMinimumStepLength( 0.0001 );
   optimizer->SetNumberOfIterations( 500 );
-
-  CommandIterationUpdate::Pointer observer = CommandIterationUpdate::New();
-  optimizer->AddObserver( itk::IterationEvent(), observer );
 
   const unsigned int numberOfLevels = 1;
 
@@ -237,40 +211,33 @@ int main( int argc, char *argv[] )
   const double finalAngleInDegrees = finalAngle * 180.0 / itk::Math::pi;
 
 
-  typedef itk::ResampleImageFilter< MovingImageType,
-                                    FixedImageType > ResampleFilterType;
+  typedef itk::VectorResampleImageFilter< RGBImageType, RGBImageType > ResampleFilterType;
   ResampleFilterType::Pointer resampler = ResampleFilterType::New();
 
   resampler->SetTransform( transform );
   resampler->SetInput( movingImageReader->GetOutput() );
 
-  FixedImageType::Pointer fixedImage = fixedImageReader->GetOutput();
-
-  resampler->SetSize(    fixedImage->GetLargestPossibleRegion().GetSize() );
+  resampler->SetSize( fixedImage->GetLargestPossibleRegion().GetSize() );
   resampler->SetOutputOrigin(  fixedImage->GetOrigin() );
   resampler->SetOutputSpacing( fixedImage->GetSpacing() );
   resampler->SetOutputDirection( fixedImage->GetDirection() );
-  resampler->SetDefaultPixelValue( 100 );
+  // resampler->SetDefaultPixelValue( 0 );
 
   typedef  unsigned char  OutputPixelType;
 
   typedef itk::Image< OutputPixelType, Dimension > OutputImageType;
 
-  typedef itk::CastImageFilter< FixedImageType, OutputImageType >
+  typedef itk::CastImageFilter< ImageType, OutputImageType >
     CastFilterType;
 
-  typedef itk::ImageFileWriter< OutputImageType >  WriterType;
+  typedef itk::ImageFileWriter< RGBImageType >  WriterType;
 
 
   WriterType::Pointer      writer =  WriterType::New();
-  CastFilterType::Pointer  caster =  CastFilterType::New();
-
 
   writer->SetFileName( argv[4] );
 
-
-  caster->SetInput( resampler->GetOutput() );
-  writer->SetInput( caster->GetOutput()   );
+  writer->SetInput( resampler->GetOutput() );
   writer->Update();
 
   return EXIT_SUCCESS;
