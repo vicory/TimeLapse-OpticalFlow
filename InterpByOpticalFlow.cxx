@@ -3,15 +3,20 @@
 #include "opencv2/optflow.hpp"
 
 #include "iostream"
+#include "string"
 
 // This code is adapted from https://github.com/Meltz014/ocv
 int main(int argc, char *argv[])
 {
-    if (argc < 4)
+    if (argc < 3)
     {
-        std::cout << "Usage: " << argv[0] << " image1 image2 output_prefix" << std::endl;
+        std::cout << "Usage: " << argv[0] << " image1 image2 " << std::endl;
         return EXIT_FAILURE;
     }
+    std::string temp = argv[1];
+    std::string base_name = temp.substr(0,temp.find_last_of('.'));
+    std::string ext = temp.substr(temp.find_last_of('.')+1);
+
     // Read images in
 	cv::Mat from, to, from_gray, to_gray;
 
@@ -137,7 +142,7 @@ int main(int argc, char *argv[])
         cv::addWeighted(out_fw,(1.0f - current_ti),out_bw,current_ti,0.0,out);         
 
      std::stringstream outfile; 
-     outfile << argv[3] << "_" << 10*current_ti << ".jpg";
+     outfile << base_name << "_" << 10*current_ti << "." << ext;
      cv::imwrite(outfile.str(), out);
 
 	}
