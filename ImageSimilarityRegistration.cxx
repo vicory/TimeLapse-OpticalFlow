@@ -81,15 +81,12 @@ public:
 
 int main( int argc, char *argv[] )
 {
-  if( argc < 4 )
+  if( argc < 5 )
     {
     std::cerr << "Missing Parameters " << std::endl;
     std::cerr << "Usage: " << argv[0];
     std::cerr << " fixedImageFile  movingImageFile ";
-    std::cerr << " outputImagefile  [differenceBeforeRegistration] ";
-    std::cerr << " [differenceAfterRegistration] ";
-    std::cerr << " [steplength] ";
-    std::cerr << " [initialScaling] [initialAngle] ";
+    std::cerr << " maskImageFile  outputImagefile";
     std::cerr << std::endl;
     return EXIT_FAILURE;
     }
@@ -111,24 +108,6 @@ int main( int argc, char *argv[] )
                                           MovingImageType,
                                           TransformType >            RegistrationType;
 
-  MetricType::Pointer         metric        = MetricType::New();
-  OptimizerType::Pointer      optimizer     = OptimizerType::New();
-  RegistrationType::Pointer   registration  = RegistrationType::New();
-
-    typedef itk::Image<unsigned char, Dimension> ImageMaskType;
-  typedef itk::ImageFileReader<ImageMaskType> MaskReaderType;
-  MaskReaderType::Pointer maskReader = MaskReaderType::New();
-  maskReader->SetFileName(argv[3]);
-  maskReader->Update();
-
-  typedef itk::ImageMaskSpatialObject<Dimension> MaskType;
-  MaskType::Pointer spatialObjectMask = MaskType::New();
-
-  spatialObjectMask->SetImage(maskReader->GetOutput());
-
-  registration->SetMetric(        metric        );
-  registration->SetOptimizer(     optimizer     );
-
   TransformType::Pointer  transform = TransformType::New();
 
   typedef itk::ImageFileReader< FixedImageType  > FixedImageReaderType;
@@ -140,9 +119,28 @@ int main( int argc, char *argv[] )
   fixedImageReader->SetFileName(  argv[1] );
   movingImageReader->SetFileName( argv[2] );
 
+  typedef itk::Image<unsigned char, Dimension> ImageMaskType;
+  typedef itk::ImageFileReader<ImageMaskType> MaskReaderType;
+  MaskReaderType::Pointer maskReader = MaskReaderType::New();
+  maskReader->SetFileName(argv[3]);
+  maskReader->Update();
+
+  typedef itk::ImageMaskSpatialObject<Dimension> MaskType;
+  MaskType::Pointer spatialObjectMask = MaskType::New();
+
+  spatialObjectMask->SetImage(maskReader->GetOutput());
+
+  RegistrationType::Pointer   registration  = RegistrationType::New();
 
   registration->SetFixedImage(    fixedImageReader->GetOutput()    );
   registration->SetMovingImage(   movingImageReader->GetOutput()   );
+
+  MetricType::Pointer         metric        = MetricType::New();
+  metric->SetFixedImageMask(spatialObjectMask);
+  registration->SetMetric(        metric        );
+
+  OptimizerType::Pointer      optimizer     = OptimizerType::New();
+  registration->SetOptimizer(     optimizer     );
 
   typedef itk::CenteredTransformInitializer<
     TransformType,
@@ -162,18 +160,6 @@ int main( int argc, char *argv[] )
   initializer->InitializeTransform();
 
   double initialScale = 1.0;
-
-  if( argc > 8 )
-    {
-    initialScale =  atof( argv[7] );
-    }
-
-  double initialAngle = 0.0;
-
-  if( argc > 9 )
-    {
-    initialAngle =  atof( argv[8] );
-    }
 
   transform->SetScale( initialScale );
   transform->SetAngle( initialAngle );
@@ -195,11 +181,6 @@ int main( int argc, char *argv[] )
   optimizer->SetScales( optimizerScales );
 
   double steplength = 1.0;
-
-  if( argc > 7 )
-    {
-    steplength = atof( argv[6] );
-    }
 
   optimizer->SetLearningRate( steplength );
   optimizer->SetMinimumStepLength( 0.0001 );
@@ -291,56 +272,6 @@ int main( int argc, char *argv[] )
   caster->SetInput( resampler->GetOutput() );
   writer->SetInput( caster->GetOutput()   );
   writer->Update();
-
-
-  typedef itk::SubtractImageFilter<
-                                  FixedImageType,
-                                  FixedImageType,
-                                  FixedImageType > DifferenceFilterType;
-
-  DifferenceFilterType::Pointer difference = DifferenceFilterType::New();
-
-
-  typedef itk::RescaleIntensityImageFilter<
-                                  FixedImageType,
-                                  OutputImageType >   RescalerType;
-
-  RescalerType::Pointer intensityRescaler = RescalerType::New();
-
-  intensityRescaler->SetInput( difference->GetOutput() );
-  intensityRescaler->SetOutputMinimum(   0 );
-  intensityRescaler->SetOutputMaximum( 255 );
-
-  difference->SetInput1( fixedImageReader->GetOutput() );
-  difference->SetInput2( resampler->GetOutput() );
-
-  resampler->SetDefaultPixelValue( 1 );
-
-  WriterType::Pointer writer2 = WriterType::New();
-  writer2->SetInput( intensityRescaler->GetOutput() );
-
-
-  // Compute the difference image between the
-  // fixed and resampled moving image.
-  if( argc > 6 )
-    {
-    writer2->SetFileName( argv[5] );
-    writer2->Update();
-    }
-
-
-  typedef itk::IdentityTransform< double, Dimension > IdentityTransformType;
-  IdentityTransformType::Pointer identity = IdentityTransformType::New();
-
-  // Compute the difference image between the
-  // fixed and moving image before registration.
-  if( argc > 5 )
-    {
-    resampler->SetTransform( identity );
-    writer2->SetFileName( argv[4] );
-    writer2->Update();
-    }
-
 
   return EXIT_SUCCESS;
 }
