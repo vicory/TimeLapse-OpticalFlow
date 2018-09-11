@@ -12,210 +12,137 @@ from shutil import copyfile
 
 import itk
 
-def ApplyTimeLapseRegistratorIteration( folder, glob, maskFile, tmpDir,
-                                        convert, iteration, portion ):
+def ApplyTimeLapseRegistrator( inDir, outDir, glob, maskFile, tmpDir, convert ):
+    # TO DO: This scale should be proportional to the mask size or adjusted
+    #   based on some similar logic
     edge_scale = "5"
 
     file_list = []
-    for root, dirnames, filenames in os.walk( folder ):
+    filename_list = []
+    for root, dirnames, filenames in os.walk( inDir ):
         for filename in fnmatch.filter( filenames, glob ):
+            filename_list.append( filename )
             file_list.append( os.path.join( root, filename ) )
+        break
     number_of_files = len( file_list )
 
     print( "Number of files = " + str( number_of_files ) )
     
-    #Make a training mask
-    run( ["ImageMath", maskFile, "-M", "1", "10", "255", "0",
-              "-a", "1", "-1", maskFile,
-              "-a", "0.5", "1", maskFile,
-              "-W", "0", tmpDir+"/maskPlus.mha" ] )
-    run( [convert, "-separate", file_list[0], tmpDir+"/base.png" ] )
+    # Make a training mask
+    #    Label pixels in the mask at 255 and pixels just outside that
+    #    region as 127.
+    run( ["ImageMath", maskFile, "-M", "1", "30", "255", "0",
+        "-a", "1", "-1", maskFile,
+        "-a", "0.5", "1", maskFile,
+        "-W", "0", tmpDir+"/maskPlus.mha" ] )
+
+    # Register everything with the time 0 image
+    atlasFile = file_list[0]
+    run( [convert, atlasFile, outDir + "/" + filename_list[0] + "_RegAtlas.png" ] )
+
+    # Optimize use of color images
+    #   Split the image into color channels and determine optimum 
+    #   linear combination of color channels that best distinguish
+    #   the pixels in the mask from the pixels just outside of the mask
+    run( [convert, "-separate", atlasFile, tmpDir+"/base.png" ] )
     run( ["EnhanceUsingDiscriminantAnalysis",
-          "--saveBasisInfo", tmpDir+"/basis.mlda",
-          "--objectId", "255,127",
-          "--labelmap", tmpDir+"/maskPlus.mha",
-          tmpDir+"/base-0.png,"+tmpDir+"/base-1.png,"+tmpDir+"/base-2.png",
-          tmpDir+"/baseEnh"] )
+        "--saveBasisInfo", tmpDir+"/basis.mlda",
+        "--objectId", "255,127",
+        "--labelmap", tmpDir+"/maskPlus.mha",
+        tmpDir + "/base-0.png," + \
+        tmpDir + "/base-1.png," + \
+        tmpDir + "/base-2.png",
+        tmpDir+"/atlasMasked"] )
+    run( ["EnhanceUsingDiscriminantAnalysis",
+        "--loadBasisInfo", tmpDir+"/basis.mlda",
+        "--objectId", "255,127",
+        tmpDir + "/base-0.png," + \
+        tmpDir + "/base-1.png," + \
+        tmpDir + "/base-2.png",
+        tmpDir+"/atlas"] )
+    run( ["ImageMath", tmpDir+"/atlas.basis00.mha",
+        "-b", edge_scale,
+        "-w", tmpDir+"/atlasB.mha"] )
 
-    for i, input_file in enumerate( file_list ):
+    # Create an registration ROI from the object of interest mask
+    #   Dilate the mask file to create an interesting ROI for registration
+    #   TO DO: Dilation should be proportional to the mask size or 
+    #   some similar logic used to define this parameter
+    run( ["ImageMath", maskFile, "-M", "1", "15", "255", "0",
+        "-W", "0", tmpDir+"/maskDilate.jpg" ] )
+    run( [convert, tmpDir+"/maskDilate.jpg", tmpDir + "/atlasMask.png"] )
+    regMaskFile = tmpDir + "/atlasMask.png"
 
-        baseFile = input_file
-        if iteration == 0:
-            curFile = input_file
-        else:
-            curFile = input_file + "-I" + str( iteration-1 ) + \
-                      "_RegAtlas.png"
-        run( [convert, "-separate", curFile, tmpDir+"/curFile.png" ] )
+    # Generate an identity transform
+    run( ["RegisterImages", atlasFile, maskFile,
+        "--saveTransform", tmpDir+"/identity.tfm",
+        "--registration", "None",
+        "--initialization", "None",
+        "--rigidMaxIterations", "0"] )
+    copyfile( tmpDir+"/identity.tfm",
+        tmpDir + "/" + filename_list[0] + "_RegAtlas.tfm" )
 
-        print( "*** " + baseFile )
+    for i, curFile in enumerate( file_list ):
 
-        if i>0 and i<number_of_files-1:
-            preFile = file_list[0] + "-I" + str( iteration ) + \
-                      "_RegAtlas.png"
-            preMaskFile = file_list[0] + "-I" + str( iteration ) + \
-                      "_Mask.png"
-            if iteration == 0:
-                postFile = file_list[i-1]
-            else:
-                postFile = file_list[i-1] + "-I" + str( iteration-1 ) + \
-                      "_RegAtlas.png"
+        print( "*** " + curFile )
+
+        if i>0:
+            tmpCurFile = tmpDir + "/" + filename_list[i]
+            outCurFile = outDir + "/" + filename_list[i]
+
+            preTransformFile = tmpDir + "/" + filename_list[i-1] + "_RegAtlas.tfm"
 
             # Blend color channels using basis
             run( [convert, "-separate", curFile, tmpDir+"/base.png" ] )
             run( ["EnhanceUsingDiscriminantAnalysis",
                   "--loadBasisInfo", tmpDir+"/basis.mlda",
                   "--objectId", "255,127",
-                  tmpDir+"/base-0.png,"+tmpDir+"/base-1.png,"+tmpDir+"/base-2.png",
-                  tmpDir+"/Temp1B"] )
-            run( ["ImageMath", tmpDir+"/Temp1B.basis00.mha", "-b", edge_scale,
-                 "-w", tmpDir+"/Temp1B.mha"] )
-
-            #run( ["ImageMath", curFile, "-B", edge_scale, "1", "0", "-w",
-                 #tmpDir+"/TempX.mha"] )
-            #run( ["ImageMath", curFile, "-B", edge_scale, "1", "1", "-w",
-                 #tmpDir+"/TempY.mha"] )
-            #run( ["ImageMath", tmpDir+"/TempX.mha", "-a", "0.5", "0.5",
-                 #tmpDir+"/TempY.mha",
-                 #"-p", "0", "-w", tmpDir+"/Temp1B.mha"] )
-            #run( ["EnhanceContrastUsingAHE", curFile,
-                  #tmpDir+"/Temp1B.mha"] )
+                  tmpDir + "/base-0.png," + \
+                  tmpDir + "/base-1.png," + \
+                  tmpDir + "/base-2.png",
+                  tmpDir + "/cur"] )
+            run( ["ImageMath", tmpDir+"/cur.basis00.mha",
+                 "-b", edge_scale,
+                 "-w", tmpDir + "/curB.mha"] )
  
-            run( [convert, "-separate", preFile, tmpDir+"/base.png" ] )
-            run( ["EnhanceUsingDiscriminantAnalysis",
-                  "--loadBasisInfo", tmpDir+"/basis.mlda",
-                  "--objectId", "255,127",
-                  tmpDir+"/base-0.png,"+tmpDir+"/base-1.png,"+tmpDir+"/base-2.png",
-                  tmpDir+"/TempPreB"] )
-            run( ["ImageMath", tmpDir+"/TempPreB.basis00.mha", "-b", edge_scale,
-                 "-w", tmpDir+"/TempPreB.mha"] )
-            #
-            #run( ["ImageMath", preFile, "-B", edge_scale, "1", "0", "-w",
-                 #tmpDir+"/TempX.mha"] )
-            #run( ["ImageMath", preFile, "-B", edge_scale, "1", "1", "-w",
-                 #tmpDir+"/TempY.mha"] )
-            #run( ["ImageMath", tmpDir+"/TempX.mha", "-a", "0.5", "0.5",
-                 #tmpDir+"/TempY.mha",
-                 #"-p", "0", "-w", tmpDir+"/TempPreB.mha"] )
-            #run( ["EnhanceContrastUsingAHE", preFile,
-                  #tmpDir+"/TempPreB.mha"] )
- 
-            run( [convert, "-separate", postFile, tmpDir+"/base.png" ] )
-            run( ["EnhanceUsingDiscriminantAnalysis",
-                  "--loadBasisInfo", tmpDir+"/basis.mlda",
-                  "--objectId", "255,127",
-                  tmpDir+"/base-0.png,"+tmpDir+"/base-1.png,"+tmpDir+"/base-2.png",
-                  tmpDir+"/TempPostB"] )
-            run( ["ImageMath", tmpDir+"/TempPostB.basis00.mha", "-b", edge_scale,
-                 "-w", tmpDir+"/TempPostB.mha"] )
-            #run( ["ImageMath", postFile, "-B", edge_scale, "1", "0", "-w",
-                 #tmpDir+"/TempX.mha"] )
-            #run( ["ImageMath", postFile, "-B", edge_scale, "1", "1", "-w",
-                 #tmpDir+"/TempY.mha"] )
-            #run( ["ImageMath", tmpDir+"/TempX.mha", "-a", "0.5", "0.5",
-                 #tmpDir+"/TempY.mha",
-                 #"-p", "0", "-w", tmpDir+"/TempPostB.mha"] )
-            #run( ["EnhanceContrastUsingAHE", postFile,
-                  #tmpDir+"/TempPostB.mha"] )
-
-            # Define the atlas (blurred) for the current file
-            run( ["RegisterImages", tmpDir+"/TempPreB.mha",
-                tmpDir+"/TempPostB.mha",
-                "--resampledImage", tmpDir+"/AtlasB.mha",
-                "--saveTransform", tmpDir+"/AtlasB.tfm",
-                "--registration", "PipelineAffine",
-                "--initialization", "ImageCenters",
-                "--metric", "MeanSqrd",
-                "--expectedRotation", "0.001",
-                "--expectedScale", "0.01",
-                "--expectedSkew", "0.0001",
-                "--expectedOffset", "60",
-                "--fixedImageMask", preMaskFile,
-                "--affineSamplingRatio", "0.5",
-                "--affineMaxIterations", "1000",
-                "--rigidSamplingRatio", "0.5",
-                "--rigidMaxIterations", "1000"] )
-                #"--resampledImagePortion", "0.5",
-                #"--skipInitialRandomSearch",
-                #"--loadTransform", tmpDir+"/AtlasB.tfm",
-
-            run( ["ImageMath", tmpDir+"/AtlasB.mha",
-                "-a", "0.4", "0.6", tmpDir+"/TempPreB.mha",
-                "-w", tmpDir+"/AtlasB.mha"] )
-
-            # Register the pre image (blurred) to the atlas
-            run( ["RegisterImages", tmpDir+"/TempPreB.mha",
-                tmpDir+"/AtlasB.mha",
-                "--resampledImage", tmpDir+"/AtlasBRegTempPreB.mha",
-                "--saveTransform", tmpDir+"/AtlasBRegTempPreB.tfm",
-                "--registration", "PipelineAffine",
-                "--initialization", "ImageCenters",
-                "--metric", "MeanSqrd",
-                "--expectedRotation", "0.001",
-                "--expectedScale", "0.01",
-                "--expectedSkew", "0.0001",
-                "--expectedOffset", "10",
-                "--fixedImageMask", preMaskFile,
-                "--affineSamplingRatio", "0.5",
-                "--affineMaxIterations", "1000",
-                "--rigidSamplingRatio", "0.5",
-                "--rigidMaxIterations", "1000"] )
-                #"--skipInitialRandomSearch",
-                #"--loadTransform", tmpDir+"/AtlasBRegTempPreB.tfm",
-
-
-            # Produce a mask for the atlas
-            #   by applying the pre image to atlas transform to the
-            #   pre image mask
-            run( ["RegisterImages", tmpDir+"/AtlasB.mha", preMaskFile,
-                "--resampledImage", tmpDir+"/MaskRegAtlasB.mha",
-                "--loadTransform", tmpDir+"/AtlasBRegTempPreB.tfm",
-                "--invertLoadedTransform", 
-                "--interpolation", "NearestNeighbor",
-                "--registration", "None",
-                "--rigidMaxIterations", "0"] )
-                #"--initialization", "None",
-
             # Register the current image (blurred) to the atlas
             run( ["RegisterImages", tmpDir+"/AtlasB.mha",
-                tmpDir+"/Temp1B.mha",
-                "--resampledImage", tmpDir+"/Temp1BRegAtlasB.mha",
-                "--saveTransform", tmpDir+"/RegAtlas.tfm",
-                "--resampledImagePortion", str( portion ),
-                "--registration", "PipelineAffine",
-                "--metric", "MeanSqrd",
-                "--initialization", "ImageCenters",
+                tmpDir+"/curB.mha",
+                "--resampledImage", tmpCurFile + "_RegAtlasB.mha",
+                "--saveTransform", tmpCurFile + "_RegAtlas.tfm",
+                "--registration", "Affine",
+                "--loadTransform", preTransformFile,
+                "--initialization", "None",
                 "--expectedRotation", "0.001",
                 "--expectedScale", "0.01",
                 "--expectedSkew", "0.0001",
                 "--expectedOffset", "60",
-                "--fixedImageMask", tmpDir+"/MaskRegAtlasB.mha",
+                "--fixedImageMask", regMaskFile,
                 "--affineSamplingRatio", "0.5",
                 "--affineMaxIterations", "1000",
                 "--rigidSamplingRatio", "0.5",
                 "--rigidMaxIterations", "1000"] )
-                #"--skipInitialRandomSearch",
-                #"--loadTransform", tmpDir+"/RegAtlas.tfm",
+                #"--metric", "MeanSqrd",
 
             # Apply the image to atlas transform to the current image (raw)
-            run( [convert, "-separate", curFile, tmpDir+"/base.png" ] )
-            run( ["RegisterImages", tmpDir+"/AtlasB.mha",
+            run( ["RegisterImages", atlasFile,
                 tmpDir+"/base-0.png",
                 "--resampledImage", tmpDir+"/RegAtlas-0.mha",
-                "--loadTransform",tmpDir+"/RegAtlas.tfm",
+                "--loadTransform",tmpCurFile + "_RegAtlas.tfm",
                 "--registration", "None",
                 "--initialization", "None",
                 "--rigidMaxIterations", "0"] )
             run( ["RegisterImages", tmpDir+"/AtlasB.mha",
                 tmpDir+"/base-1.png",
                 "--resampledImage", tmpDir+"/RegAtlas-1.mha",
-                "--loadTransform",tmpDir+"/RegAtlas.tfm",
+                "--loadTransform",tmpCurFile + "_RegAtlas.tfm",
                 "--registration", "None",
                 "--initialization", "None",
                 "--rigidMaxIterations", "0"] )
             run( ["RegisterImages", tmpDir+"/AtlasB.mha",
                 tmpDir+"/base-2.png",
                 "--resampledImage", tmpDir+"/RegAtlas-2.mha",
-                "--loadTransform",tmpDir+"/RegAtlas.tfm",
+                "--loadTransform",tmpCurFile + "_RegAtlas.tfm",
                 "--registration", "None",
                 "--initialization", "None",
                 "--rigidMaxIterations", "0"] )
@@ -231,46 +158,14 @@ def ApplyTimeLapseRegistratorIteration( folder, glob, maskFile, tmpDir,
                 tmpDir+"/RegAtlas-2.png",
                 "-colorspace", "sRGB",
                 "-type", "truecolor",
-                baseFile + "-I" + str( iteration ) + "_RegAtlas.png"] )
+                outCurFile + "_RegAtlas.png"] )
 
-            # Make the atlas make the registered current image mask
-            run( ["ImageMath", tmpDir+"/MaskRegAtlasB.mha",
-                "-W", "0",
-                baseFile + "-I" + str( iteration ) + "_Mask.png"] )
-
-        else:
-            # First image we don't perform a registration
-            run( [convert, baseFile,
-                baseFile + "-I" + str( iteration ) + "_RegAtlas.png"] )
-            run( [convert, maskFile,
-                baseFile + "-I" + str( iteration ) + "_Mask.png"] )
-
-            # Generate an identity transform
-            #run( ["RegisterImages", baseFile, maskFile,
-                #"--saveTransform", tmpDir+"/identity.tfm",
-                #"--registration", "None",
-                #"--initialization", "None",
-                #"--rigidMaxIterations", "0"] )
-            #copyfile( tmpDir+"/identity.tfm", tmpDir+"/AtlasB.tfm" )
-            #copyfile( tmpDir+"/identity.tfm",
-                #tmpDir+"/AtlasBRegTempPreB.tfm" )
-            #copyfile( tmpDir+"/identity.tfm", tmpDir+"/MaskRegAtlasB.tfm" )
-            #copyfile( tmpDir+"/identity.tfm", tmpDir+"/RegAtlas.tfm" )
-
-
-def ApplyTimeLapseRegistrator( folder, glob, maskFile, tmpDir, convert ):
-    # Make three registration passes through the data.
-    ApplyTimeLapseRegistratorIteration( folder, glob, maskFile, tmpDir,
-        convert, 0, 1.0 )
-    #ApplyTimeLapseRegistratorIteration( folder, glob, maskFile, tmpDir,
-         # convert, 1, 1.0 )
-    #ApplyTimeLapseRegistratorIteration( folder, glob, maskFile, tmpDir,
-         # convert, 2, 1.0 )
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser( 
         description='Apply timeLapseRegistrator to files in a folder.' )
-    parser.add_argument( 'folder', help='Folder to apply the script to.' )
+    parser.add_argument( 'inputFolder', help='Folder to apply the script to.' )
+    parser.add_argument( 'outputFolder', help='Folder to save the results to.' )
     parser.add_argument( '--glob',
         help='Glob to find files recursively in the given folder.',
         default='*.???' )
@@ -282,5 +177,5 @@ if __name__ == '__main__':
     parser.add_argument( '--tmpDir', help='Folder for Temp files.',
         default='tmp' )
     args = parser.parse_args()
-    ApplyTimeLapseRegistrator( args.folder, args.glob, args.maskFile,
-        args.tmpDir, args.convert )
+    ApplyTimeLapseRegistrator( args.inputFolder, args.outputFolder,
+        args.glob, args.maskFile, args.tmpDir, args.convert )
